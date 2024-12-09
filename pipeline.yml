@@ -1,0 +1,113 @@
+trigger:
+  branches:
+    include:
+    - develop
+    - release
+    - main
+
+variables:
+  imageRegistry: "<your-container-registry-name>.azurecr.io"
+  aksClusterName: "pukunaks"
+  resourceGroupName: "akshandson"
+
+stages:
+- stage: Build
+  displayName: Build Stage
+  jobs:
+  - job: BuildFrontend
+    displayName: Build Frontend
+    pool:
+      vmImage: 'ubuntu-latest'
+    steps:
+    - task: NodeTool@0
+      inputs:
+        versionSpec: '16.x'
+    - script: |
+        npm install
+        npm run build
+      displayName: Build Frontend
+    - task: Docker@2
+      inputs:
+        containerRegistry: '<your-service-connection-name>'
+        repository: 'frontend'
+        command: 'buildAndPush'
+        Dockerfile: 'frontend/Dockerfile'
+        tags: |
+          latest
+
+  - job: BuildBackend
+    displayName: Build Backend
+    pool:
+      vmImage: 'ubuntu-latest'
+    steps:
+    - task: Docker@2
+      inputs:
+        containerRegistry: '<your-service-connection-name>'
+        repository: 'backend'
+        command: 'buildAndPush'
+        Dockerfile: 'backend/Dockerfile'
+        tags: |
+          latest
+
+- stage: DeployToDev
+  displayName: Deploy to Development
+  dependsOn: Build
+  condition: eq(variables['Build.SourceBranchName'], 'develop')
+  jobs:
+  - job: Deploy
+    displayName: Deploy to Dev AKS
+    pool:
+      vmImage: 'ubuntu-latest'
+    steps:
+    - task: KubernetesManifest@0
+      inputs:
+        kubernetesServiceConnection: '<your-aks-service-connection>'
+        namespace: 'dev'
+        manifests: |
+          k8s/frontend.yaml
+          k8s/backend.yaml
+        containers: |
+          $(imageRegistry)/frontend:latest
+          $(imageRegistry)/backend:latest
+
+- stage: DeployToPreProd
+  displayName: Deploy to Pre-Prod
+  dependsOn: DeployToDev
+  condition: eq(variables['Build.SourceBranchName'], 'release')
+  jobs:
+  - job: Deploy
+    displayName: Deploy to Pre-Prod AKS
+    pool:
+      vmImage: 'ubuntu-latest'
+    steps:
+    - task: KubernetesManifest@0
+      inputs:
+        kubernetesServiceConnection: '<your-aks-service-connection>'
+        namespace: 'preprod'
+        manifests: |
+          k8s/frontend.yaml
+          k8s/backend.yaml
+        containers: |
+          $(imageRegistry)/frontend:latest
+          $(imageRegistry)/backend:latest
+
+- stage: DeployToProd
+  displayName: Deploy to Production
+  dependsOn: DeployToPreProd
+  condition: eq(variables['Build.SourceBranchName'], 'main')
+  jobs:
+  - job: Deploy
+    displayName: Deploy to Production AKS
+    pool:
+      vmImage: 'ubuntu-latest'
+    steps:
+    - task: KubernetesManifest@0
+      inputs:
+        kubernetesServiceConnection: '<your-aks-service-connection>'
+        namespace: 'prod'
+        manifests: |
+          k8s/frontend.yaml
+          k8s/backend.yaml
+        containers: |
+          $(imageRegistry)/frontend:latest
+          $(imageRegistry)/backend:latest
